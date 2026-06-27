@@ -135,6 +135,13 @@ static void DrawStrC(LCDFont* f, const char* s, int y)
     DrawStr(f, s, (SCREEN_W - TextW(f, s)) / 2, y);
 }
 
+// Safely copy a string into a fixed-size buffer and ensure null-termination
+static void SafeStrCopy(char* dest, const char* src, size_t destSize)
+{
+    strncpy(dest, src, destSize - 1);
+    dest[destSize - 1] = '\0';
+}
+
 // ── Decorative helpers ────────────────────────────────────────────
 
 // Draw an 8-pointed star shape using lines
@@ -252,7 +259,7 @@ static void DrawCelebration(PDEntry* e)
     LCDFont* sys = SysFont();
 
     // Big celebration messages
-    DrawStrC(sys, "Its playdate time!", 72);
+    DrawStrC(sys, "It's playdate time!", 72);
     char msg[64];
     snprintf(msg, sizeof(msg), "Time to play with %s!", e->name);
     DrawStrC(sys, msg, 94);
@@ -334,7 +341,7 @@ static void DrawAdd(void)
     // Hours and minutes displayed as highlighted black boxes side by side
     char hrBuf[16], minBuf[16];
     snprintf(hrBuf,  sizeof(hrBuf),  "%02d hr%s", addFlow.hours,
-             addFlow.hours != 1 ? "s" : " ");
+             addFlow.hours != 1 ? "s" : "");
     snprintf(minBuf, sizeof(minBuf), "%02d min",  addFlow.minutes);
 
     int hrW = TextW(sys, hrBuf);
@@ -451,8 +458,7 @@ static void HandleAddInput(PDButtons pushed)
     if (pushed & kButtonA) {
         if (numEntries < MAX_PLAYDATES) {
             PDEntry* e = &entries[numEntries];
-            strncpy(e->name, kNames[addFlow.nameIdx], sizeof(e->name) - 1);
-            e->name[sizeof(e->name) - 1] = '\0';
+            SafeStrCopy(e->name, kNames[addFlow.nameIdx], sizeof(e->name));
             float secs = (float)(addFlow.hours * 3600 + addFlow.minutes * 60);
             if (secs <= 0.0f) secs = 60.0f;
             e->origSecs   = secs;
@@ -513,7 +519,10 @@ static int update(void* userdata)
     float now = pd->system->getElapsedTime();
     float dt  = now - lastTime;
     lastTime  = now;
-    if (dt > 0.1f) dt = 0.1f; // cap dt to prevent large first-frame spike
+    // Cap dt to 100 ms: prevents particles and timers jumping forward on the
+    // first frame (where getElapsedTime() may return a large initial value)
+    // or after the app is paused/suspended by the system.
+    if (dt > 0.1f) dt = 0.1f;
 
     HandleInput();
 
@@ -546,19 +555,19 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
         clockFont = pd->graphics->loadFont("fonts/Mikodacs-Clock", &fontErr);
 
         // Pre-seed 3 example playdates so the app looks alive on first launch
-        strncpy(entries[0].name, "Emma", sizeof(entries[0].name) - 1);
+        SafeStrCopy(entries[0].name, "Emma", sizeof(entries[0].name));
         entries[0].origSecs   = 2.0f * 60.0f;       // 2 minutes (quick to see countdown)
         entries[0].secsLeft   = entries[0].origSecs;
         entries[0].arrived    = 0;
         entries[0].celebTimer = 0.0f;
 
-        strncpy(entries[1].name, "Liam", sizeof(entries[1].name) - 1);
+        SafeStrCopy(entries[1].name, "Liam", sizeof(entries[1].name));
         entries[1].origSecs   = 1.5f * 3600.0f;     // 1 hour 30 minutes
         entries[1].secsLeft   = entries[1].origSecs;
         entries[1].arrived    = 0;
         entries[1].celebTimer = 0.0f;
 
-        strncpy(entries[2].name, "Mia", sizeof(entries[2].name) - 1);
+        SafeStrCopy(entries[2].name, "Mia", sizeof(entries[2].name));
         entries[2].origSecs   = 24.0f * 3600.0f;    // 1 day
         entries[2].secsLeft   = entries[2].origSecs;
         entries[2].arrived    = 0;
