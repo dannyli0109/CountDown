@@ -40,7 +40,7 @@
             "label": "Playdate: Run Simulator",
             "type": "shell",
             "dependsOn": "Playdate: Compile",
-            "command": "SDK=\"${env:PLAYDATE_SDK_PATH}\"; if [ -z \"$SDK\" ]; then SDK=$(awk -F'\\t' '/^SDKRoot/{print $2; exit}' \"$HOME/.Playdate/config\"); fi; /usr/bin/open -a \"$SDK/bin/Playdate Simulator.app\" \"${workspaceFolder}/HelloWorld.pdx\"",
+            "command": "SDK=\"${env:PLAYDATE_SDK_PATH}\"; if [ -z \"$SDK\" ]; then SDK=$(awk -F'\\t' '/^SDKRoot/{print $2; exit}' \"$HOME/.Playdate/config\"); fi; /usr/bin/open -a \"$SDK/bin/Playdate Simulator.app\" \"${workspaceFolder}/CountDown.pdx\"",
             "options": {
                 "cwd": "${workspaceFolder}"
             },

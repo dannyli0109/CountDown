@@ -1,5 +1,5 @@
-name=Count down
+name=Playdate Countdown
 author=Dave Hayden
-description=A small demo of the C API
+description=A playful kids countdown app - count down to your next playdate with friends! Features confetti celebrations and a fun 1-bit display.
 pdxversion=30005
-buildtime=835875516
+buildtime=835877930
