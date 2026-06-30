@@ -6,6 +6,26 @@
 
 static PlaydateAPI* pd = NULL;
 
+static LCDBitmap* numBmp[10] = {0};
+static LCDBitmap* colonBmp = NULL;
+static int cardW = 72;
+static int fullH = 96;
+static int halfH = 48;
+
+#define DIGIT_COUNT 4
+#define FLIP_SPEED 4.0f   // flips per second (~0.25s)
+#define DIGIT_SCALE 1.0f
+
+// 每个数字位的翻牌状态
+typedef struct DigitFlip {
+    char value;        // 当前显示的字符
+    char prev;         // 翻牌前的字符
+    float progress;    // 0..1，翻牌动画进度
+    int flipping;      // 是否正在翻牌
+} DigitFlip;
+
+static DigitFlip digits[DIGIT_COUNT];
+
 typedef enum TimerState {
     TIMER_READY,     // 准备开始，还没运行
     TIMER_RUNNING,   // 正在倒计时
@@ -145,13 +165,106 @@ static void HandleInput(void)
 	}
 }
 
+// 把当前时间写进 digits[]，检测变化时触发翻牌
+static void UpdateDigits(float dt)
+{
+    char timeText[16];
+    FormatTime(timer.secondsLeft, timeText, sizeof(timeText));
+
+    // timeText 形如 "MM:SS"，取出 4 个数字
+    char chars[DIGIT_COUNT] = { timeText[0], timeText[1], timeText[3], timeText[4] };
+
+    for (int i = 0; i < DIGIT_COUNT; i++) {
+        if (digits[i].value != chars[i]) {
+            digits[i].prev = digits[i].value;
+            digits[i].value = chars[i];
+            digits[i].progress = 0.0f;
+            digits[i].flipping = 1;
+        }
+        if (digits[i].flipping) {
+            digits[i].progress += dt * FLIP_SPEED;
+            if (digits[i].progress >= 1.0f) {
+                digits[i].progress = 1.0f;
+                digits[i].flipping = 0;
+            }
+        }
+    }
+}
+
+// 画一个数字卡片，两段式翻牌动画（用完整数字图裁剪出上下半）
+static void DrawDigit(int x, int y, char value, char prev, float progress)
+{
+    int d = value - '0';
+    int p = prev - '0';
+    if (d < 0 || d > 9) return;
+    if (p < 0 || p > 9) p = d;
+
+    float s = DIGIT_SCALE;
+    int cw = (int)(cardW * s);
+    int topH = (int)(halfH * s);
+
+    // 透明像素显示为白色：先铺白底
+    pd->graphics->fillRect(x, y, cw, topH * 2, kColorWhite);
+
+    // 底层（盖板下面露出的部分）：新的上半 + 旧的下半
+    pd->graphics->setClipRect(x, y, cw, topH);
+    pd->graphics->drawScaledBitmap(numBmp[d], x, y, s, s);
+    pd->graphics->setClipRect(x, y + topH, cw, topH);
+    pd->graphics->drawScaledBitmap(numBmp[p], x, y, s, s);
+
+    if (progress < 0.5f) {
+        // 第一阶段：旧的上半从中线往下折
+        float fold = 1.0f - progress / 0.5f;   // 1..0
+        int h = (int)(topH * fold);
+        int drawY = y + topH - h;
+        pd->graphics->setClipRect(x, drawY, cw, h);
+        pd->graphics->drawScaledBitmap(numBmp[p], x, drawY, s, s * fold);
+    } else {
+        // 第二阶段：新的下半从中线往下展开
+        float grow = (progress - 0.5f) / 0.5f;  // 0..1
+        int h = (int)(topH * grow);
+        int drawY = y + topH - h;
+        pd->graphics->setClipRect(x, y + topH, cw, h);
+        pd->graphics->drawScaledBitmap(numBmp[d], x, drawY, s, s * grow);
+    }
+
+    pd->graphics->clearClipRect();
+}
+
+// 画 MM:SS 翻牌时钟
+static void DrawClock(void)
+{
+    pd->graphics->setDrawMode(kDrawModeCopy);
+
+    int cw = (int)(cardW * DIGIT_SCALE);
+    int ch = (int)(halfH * DIGIT_SCALE) * 2;
+    int gap = 8;
+    int colonW = 20;
+    int totalW = DIGIT_COUNT * cw + 3 * gap + colonW;
+    int startX = (400 - totalW) / 2;
+    int y = (240 - ch) / 2;
+
+    int x = startX;
+    for (int i = 0; i < DIGIT_COUNT; i++) {
+        DrawDigit(x, y, digits[i].value, digits[i].prev, digits[i].progress);
+        x += cw + gap;
+        if (i == 1) {
+            float cs = (float)ch / 104.0f;
+            int colonImgW = (int)(18 * cs);
+            x -= gap;
+            pd->graphics->drawScaledBitmap(colonBmp, x + (colonW - colonImgW) / 2, y, cs, cs);
+            x += colonW;
+        }
+    }
+}
+
 // 绘制界面
 static void Draw(void)
 {
-    pd->graphics->clear(kColorBlack);
+    pd->graphics->clear(kColorWhite);
 
     const char* title = "Pocket Focus";
-    LCDBitmapDrawMode oldMode = pd->graphics->setDrawMode(kDrawModeFillWhite);
+    LCDBitmapDrawMode oldMode = pd->graphics->setDrawMode(kDrawModeFillBlack);
 
     pd->graphics->drawText(
         title,
@@ -161,19 +274,7 @@ static void Draw(void)
         20
     );
 
-    char timeText[32];
-
-    // TODO:
-    // 调用 FormatTime，把 timer.secondsLeft 变成文本
-	FormatTime(timer.secondsLeft, timeText, sizeof(timeText));
-
-    pd->graphics->drawText(
-        timeText,
-        strlen(timeText),
-        kASCIIEncoding,
-        20,
-        70
-    );
+    DrawClock();
 
     const char* statusText;
 
@@ -191,22 +292,22 @@ static void Draw(void)
     }
 
 
-    pd->graphics->drawText(
-        statusText,
-        strlen(statusText),
-        kASCIIEncoding,
-        20,
-        110
-    );
+    // pd->graphics->drawText(
+    //     statusText,
+    //     strlen(statusText),
+    //     kASCIIEncoding,
+    //     20,
+    //     200
+    // );
 
     const char* hint = "A: Start/Pause   B: Reset";
-    pd->graphics->drawText(
-        hint,
-        strlen(hint),
-        kASCIIEncoding,
-        20,
-        200
-    );
+    // pd->graphics->drawText(
+    //     hint,
+    //     strlen(hint),
+    //     kASCIIEncoding,
+    //     20,
+    //     200
+    // );
     pd->graphics->setDrawMode(oldMode);
 }
 
@@ -221,6 +322,7 @@ static int update(void* userdata)
 
     HandleInput();
     Timer_Update(&timer, dt);
+    UpdateDigits(dt);
     Draw();
 
     return 1;
@@ -237,6 +339,30 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
         pd = playdate;
 
         pd->display->setRefreshRate(30);
+
+        const char* err = NULL;
+        static const char* names[10] = {
+            "zero", "one", "two", "three", "four",
+            "five", "six", "seven", "eight", "nine"
+        };
+        for (int i = 0; i < 10; i++) {
+            numBmp[i] = pd->graphics->loadBitmap(names[i], &err);
+            if (numBmp[i] == NULL) pd->system->logToConsole("%s load failed: %s", names[i], err);
+        }
+        if (numBmp[0]) {
+            pd->graphics->getBitmapData(numBmp[0], &cardW, &fullH, NULL, NULL, NULL);
+            halfH = fullH / 2;
+        }
+
+        colonBmp = pd->graphics->loadBitmap("colon", &err);
+        if (colonBmp == NULL) pd->system->logToConsole("colon load failed: %s", err);
+
+        for (int i = 0; i < DIGIT_COUNT; i++) {
+            digits[i].value = '0';
+            digits[i].prev = '0';
+            digits[i].progress = 1.0f;
+            digits[i].flipping = 0;
+        }
 
         Timer_Init(&timer, time * 60);
 
