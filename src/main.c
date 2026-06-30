@@ -7,6 +7,7 @@
 static PlaydateAPI* pd = NULL;
 
 static LCDBitmap* numBmp[10] = {0};
+static LCDBitmap* frameBmp = NULL;
 static LCDBitmap* colonBmp = NULL;
 static int cardW = 72;
 static int fullH = 96;
@@ -22,6 +23,7 @@ typedef struct DigitFlip {
     char prev;         // 翻牌前的字符
     float progress;    // 0..1，翻牌动画进度
     int flipping;      // 是否正在翻牌
+    int dir;           // 翻牌方向：1 = 向下（倒数），-1 = 向上（增加时间）
 } DigitFlip;
 
 static DigitFlip digits[DIGIT_COUNT];
@@ -135,7 +137,7 @@ static void HandleInput(void)
     pd->system->getButtonState(&current, &pushed, &released);
     if (timer.state == TIMER_READY) {
         crankOffset += pd->system->getCrankChange();
-        if (fabsf(crankOffset) > 10.0f) {
+        if (fabsf(crankOffset) > 30.0f) {
             if (crankOffset > 0) {
                 time++;
             } else {
@@ -148,7 +150,7 @@ static void HandleInput(void)
 
             Timer_Init(&timer, time * 30);
 
-            crankOffset -= 10.0f * (crankOffset > 0 ? 1 : -1);
+            crankOffset -= 30.0f * (crankOffset > 0 ? 1 : -1);
         }
     }
     
@@ -168,11 +170,18 @@ static void HandleInput(void)
 // 把当前时间写进 digits[]，检测变化时触发翻牌
 static void UpdateDigits(float dt)
 {
+    static float prevSeconds = -1.0f;
+
     char timeText[16];
     FormatTime(timer.secondsLeft, timeText, sizeof(timeText));
 
     // timeText 形如 "MM:SS"，取出 4 个数字
     char chars[DIGIT_COUNT] = { timeText[0], timeText[1], timeText[3], timeText[4] };
+
+    // 根据剩余秒数的变化方向决定翻牌方向：
+    // 时间增加（上调）-> 向上翻（-1）；否则向下翻（1）
+    int dir = (prevSeconds >= 0.0f && timer.secondsLeft > prevSeconds) ? -1 : 1;
+    prevSeconds = timer.secondsLeft;
 
     for (int i = 0; i < DIGIT_COUNT; i++) {
         if (digits[i].value != chars[i]) {
@@ -180,6 +189,7 @@ static void UpdateDigits(float dt)
             digits[i].value = chars[i];
             digits[i].progress = 0.0f;
             digits[i].flipping = 1;
+            digits[i].dir = dir;
         }
         if (digits[i].flipping) {
             digits[i].progress += dt * FLIP_SPEED;
@@ -191,8 +201,19 @@ static void UpdateDigits(float dt)
     }
 }
 
-// 画一个数字卡片，两段式翻牌动画（用完整数字图裁剪出上下半）
-static void DrawDigit(int x, int y, char value, char prev, float progress)
+// 画一个卡片块：先画卡片边框，再画数字，两者共用同样的缩放
+// drawY/scaleY 控制折叠，clipY/clipH 限定可见区域
+static void DrawCard(int num, int x, float drawY, float s, float scaleY,
+                     int clipX, int clipY, int clipW, int clipH)
+{
+    pd->graphics->setClipRect(clipX, clipY, clipW, clipH);
+    pd->graphics->drawScaledBitmap(frameBmp, x, drawY, s, scaleY);
+    pd->graphics->drawScaledBitmap(numBmp[num], x, drawY, s, scaleY);
+}
+
+// 画一个数字卡片，两段式翻牌动画（边框 + 数字一起折叠）
+// dir = 1 向下翻（倒数）；dir = -1 向上翻（增加时间）
+static void DrawDigit(int x, int y, char value, char prev, float progress, int dir)
 {
     int d = value - '0';
     int p = prev - '0';
@@ -206,26 +227,42 @@ static void DrawDigit(int x, int y, char value, char prev, float progress)
     // 透明像素显示为白色：先铺白底
     pd->graphics->fillRect(x, y, cw, topH * 2, kColorWhite);
 
-    // 底层（盖板下面露出的部分）：新的上半 + 旧的下半
-    pd->graphics->setClipRect(x, y, cw, topH);
-    pd->graphics->drawScaledBitmap(numBmp[d], x, y, s, s);
-    pd->graphics->setClipRect(x, y + topH, cw, topH);
-    pd->graphics->drawScaledBitmap(numBmp[p], x, y, s, s);
+    if (dir < 0) {
+        // 向上翻：底层是旧的上半 + 新的下半
+        DrawCard(p, x, y, s, s, x, y, cw, topH);
+        DrawCard(d, x, y, s, s, x, y + topH, cw, topH);
 
-    if (progress < 0.5f) {
-        // 第一阶段：旧的上半从中线往下折
-        float fold = 1.0f - progress / 0.5f;   // 1..0
-        int h = (int)(topH * fold);
-        int drawY = y + topH - h;
-        pd->graphics->setClipRect(x, drawY, cw, h);
-        pd->graphics->drawScaledBitmap(numBmp[p], x, drawY, s, s * fold);
+        if (progress < 0.5f) {
+            // 第一阶段：旧的下半从中线往上折
+            float fold = 1.0f - progress / 0.5f;   // 1..0
+            int h = (int)(topH * fold);
+            int drawY = y + topH - h;
+            DrawCard(p, x, drawY, s, s * fold, x, y + topH, cw, h);
+        } else {
+            // 第二阶段：新的上半从中线往上展开
+            float grow = (progress - 0.5f) / 0.5f;  // 0..1
+            int h = (int)(topH * grow);
+            int drawY = y + topH - h;
+            DrawCard(d, x, drawY, s, s * grow, x, y + topH - h, cw, h);
+        }
     } else {
-        // 第二阶段：新的下半从中线往下展开
-        float grow = (progress - 0.5f) / 0.5f;  // 0..1
-        int h = (int)(topH * grow);
-        int drawY = y + topH - h;
-        pd->graphics->setClipRect(x, y + topH, cw, h);
-        pd->graphics->drawScaledBitmap(numBmp[d], x, drawY, s, s * grow);
+        // 向下翻：底层是新的上半 + 旧的下半
+        DrawCard(d, x, y, s, s, x, y, cw, topH);
+        DrawCard(p, x, y, s, s, x, y + topH, cw, topH);
+
+        if (progress < 0.5f) {
+            // 第一阶段：旧的上半从中线往下折
+            float fold = 1.0f - progress / 0.5f;   // 1..0
+            int h = (int)(topH * fold);
+            int drawY = y + topH - h;
+            DrawCard(p, x, drawY, s, s * fold, x, drawY, cw, h);
+        } else {
+            // 第二阶段：新的下半从中线往下展开
+            float grow = (progress - 0.5f) / 0.5f;  // 0..1
+            int h = (int)(topH * grow);
+            int drawY = y + topH - h;
+            DrawCard(d, x, drawY, s, s * grow, x, y + topH, cw, h);
+        }
     }
 
     pd->graphics->clearClipRect();
@@ -246,7 +283,7 @@ static void DrawClock(void)
 
     int x = startX;
     for (int i = 0; i < DIGIT_COUNT; i++) {
-        DrawDigit(x, y, digits[i].value, digits[i].prev, digits[i].progress);
+        DrawDigit(x, y, digits[i].value, digits[i].prev, digits[i].progress, digits[i].dir);
         x += cw + gap;
         if (i == 1) {
             float cs = (float)ch / 104.0f;
@@ -301,13 +338,13 @@ static void Draw(void)
     // );
 
     const char* hint = "A: Start/Pause   B: Reset";
-    // pd->graphics->drawText(
-    //     hint,
-    //     strlen(hint),
-    //     kASCIIEncoding,
-    //     20,
-    //     200
-    // );
+    pd->graphics->drawText(
+        hint,
+        strlen(hint),
+        kASCIIEncoding,
+        20,
+        200
+    );
     pd->graphics->setDrawMode(oldMode);
 }
 
@@ -346,7 +383,9 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
             "five", "six", "seven", "eight", "nine"
         };
         for (int i = 0; i < 10; i++) {
-            numBmp[i] = pd->graphics->loadBitmap(names[i], &err);
+            char path[64];
+            snprintf(path, sizeof(path), "./images/%s", names[i]);
+            numBmp[i] = pd->graphics->loadBitmap(path, &err);
             if (numBmp[i] == NULL) pd->system->logToConsole("%s load failed: %s", names[i], err);
         }
         if (numBmp[0]) {
@@ -354,14 +393,18 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg)
             halfH = fullH / 2;
         }
 
-        colonBmp = pd->graphics->loadBitmap("colon", &err);
+        colonBmp = pd->graphics->loadBitmap("./images/colon", &err);
         if (colonBmp == NULL) pd->system->logToConsole("colon load failed: %s", err);
+
+        frameBmp = pd->graphics->loadBitmap("./images/frame", &err);
+        if (frameBmp == NULL) pd->system->logToConsole("frame load failed: %s", err);
 
         for (int i = 0; i < DIGIT_COUNT; i++) {
             digits[i].value = '0';
             digits[i].prev = '0';
             digits[i].progress = 1.0f;
             digits[i].flipping = 0;
+            digits[i].dir = 1;
         }
 
         Timer_Init(&timer, time * 60);
