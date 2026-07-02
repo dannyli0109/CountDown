@@ -1,3 +1,4 @@
 name=Playdate Countdown
-author=Dave Hayden
+author=Danny Li
 description=A playful kids countdown app - count down to your next playdate with friends! Features confetti celebrations and a fun 1-bit display.
+bundleID=com.dannyli.playdatecountdown
